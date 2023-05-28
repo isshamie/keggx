@@ -16,6 +16,7 @@ import seaborn as sns
 from .draw import Node, set_grid, shortest_arrow
 
 
+print('hi')
 KEGG_COMPOUND_FILE = pkg_resources.resource_filename('keggx', 'KEGG_compound_ids.txt')
 
 
@@ -295,7 +296,7 @@ class KEGG:
 		
 			# Add edges *between* group members. Complexed proteins are essentially `binding/association`
 			group_rows = [ self._populate_edge_attributes(a, b, 'PComplex', ['protein complex']) for a,b in combinations(group_members, 2) ]
-			edge_attributes_df = edge_attributes_df.append(pd.DataFrame(group_rows, columns=self.edge_columns), ignore_index=True).fillna(0)
+			edge_attributes_df = pd.concat((edge_attributes_df, pd.DataFrame(group_rows, columns=self.edge_columns)), ignore_index=True, axis=0).fillna(0)
 		
 		return edge_attributes_df
 
@@ -392,7 +393,7 @@ class KEGG:
 
 	## VISUALIZE
 
-	def view(self, scale=1, show_compounds=False, gene_values=None): 
+	def view(self, scale=2, show_compounds=False, gene_values=None, n_leg=6): 
 
 		entry_attributes_df = self.entry_attributes_df.replace('', np.nan).dropna(subset=['name'])
 
@@ -402,16 +403,27 @@ class KEGG:
 			scale = scale
 		)
 
+
 		# Render node shapes
 		if gene_values is not None: 
+			gene_values = gene_values.sort_values()
+			
+			# get labels for legend
+			vals_unique = gene_values.unique()
+			step = int(np.floor(len(vals_unique)/ min(n_leg, len(vals_unique))))
+			gene_vals_for_legend = vals_unique[::step]
+
 			# Lookup list of colors
 			hex_lookup = [color for color in sns.color_palette("coolwarm", 256).as_hex()] + ['#b3b3b3']
 			# Get lookup index based on gene value and map to gene colors
 			gene_values = gene_values.reindex(entry_attributes_df['name'].unique())
 			rgb_indices = ((gene_values / gene_values.abs().max() + 1) / 2 * 255).fillna(-1).astype(int)
-			gene_colors = { node:hex_lookup[idx] for node,idx in rgb_indices.iteritems() }
+			gene_colors = { node:hex_lookup[idx] for node,idx in rgb_indices.items() }
 
 		nodes_dic = {node_id:Node(attribs) for node_id,attribs in entry_attributes_df.to_dict('index').items()}
+		#print(nodes_dic)
+		patches = []
+		legend_labels = [] # used to not duplicate legend patches 
 		for node_id,node in nodes_dic.items(): 
 			if node.shape == 'circle': 
 				ax.add_patch(matplotlib.patches.Circle(xy=node.center, radius=node.width/2, color='k', fill=False))
@@ -424,10 +436,17 @@ class KEGG:
 				# ax.add_patch(matplotlib.patches.Rectangle(xy=node.anchor, width=node.width, height=node.height, color='k', fill=False))
 				if gene_values is not None: 
 					facecolor = gene_colors[node.name]
+					g_val = gene_values[node.name]
 				else: 
 					facecolor = '#b3b3b3'
+					g_val = 'NA'
 
-				ax.add_patch(matplotlib.patches.Rectangle(xy=node.anchor, width=node.width, height=node.height, ec='k', fc=facecolor))
+				if (g_val in legend_labels or np.isnan(g_val)) or g_val not in gene_vals_for_legend:
+					patches.append(matplotlib.patches.Rectangle(xy=node.anchor, width=node.width, height=node.height, ec='k', fc=facecolor))
+				else:
+					patches.append(matplotlib.patches.Rectangle(xy=node.anchor, width=node.width, height=node.height, ec='k', fc=facecolor, label=g_val))
+					legend_labels.append(g_val)
+				ax.add_patch(patches[-1])
 				ax.text(x=node.center[0], y=node.center[1]+1, s=node.name, fontsize = 6 * scale, ha='center', va='center')
 
 
@@ -435,7 +454,6 @@ class KEGG:
 		for _,edge_attribs in self.edge_attributes_df.iterrows(): 
 			# Get source and target positions for arrow
 			source_pos, target_pos = shortest_arrow(nodes_dic[edge_attribs['source']], nodes_dic[edge_attribs['target']])
-
 
 			arrowprops = dict(color='k')
 			if edge_attribs['indirect'] == 1: arrowprops['linestyle'] = '--'
@@ -453,11 +471,16 @@ class KEGG:
 				arrowprops['arrowstyle'] = '-'
 
 			arrow = ax.annotate('', xy=target_pos, xytext=source_pos, arrowprops=arrowprops)
-
 			# Arrow modification annotation
 			if edge_attribs['modification'] != '': 
 				midpoint = (source_pos + target_pos) / 2
 				ax.text(x=midpoint[0], y=midpoint[1] - 5, s=edge_attribs['modification'], color='red', ha='center', va='center', fontsize=6*scale)
+
+		
+		#add legend to plot
+		handles, labels = plt.gca().get_legend_handles_labels()		
+		order = np.argsort([float(x) for x in labels]) #specify order of items in legend by sorting
+		plt.legend([handles[idx] for idx in order],[labels[idx] for idx in order], loc=(0.5, 1.04)) 
 
 		return fig, ax
 
